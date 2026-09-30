@@ -9,7 +9,10 @@ Supported inputs (auto-detected):
 Output (OUT = --out):
   OUT/images/<group>/<file>      symlink (or copy) to the original image
   OUT/labels/<group>/<stem>.txt  YOLO-seg polygon labels
-  OUT/index.csv                  image, group, order, width, height, n_inst, <class counts...>
+  OUT/index.csv                  image, group, order, width, height, n_inst, <source-class counts...>
+
+Labels are written with the training ids (configs/classes.yaml `map`: 26 source classes -> 10),
+while index.csv keeps the 26 source-class counts so sampling can balance at the fine level.
   OUT/prepare_report.txt         dropped labels / missing images summary
 
 `group` is the video sequence / folder. Consecutive frames of one sequence are near-duplicates,
@@ -127,7 +130,7 @@ def main():
     args = ap.parse_args()
 
     cls = load_classes(args.classes)
-    names = cls["names"]
+    names, train_names, s2t = cls["source_names"], cls["names"], cls["source_to_train"]
     lookup = {n: i for i, n in enumerate(names)}
     lookup.update({norm_label(a): lookup[c] for a, c in cls.get("aliases", {}).items()})
 
@@ -145,7 +148,7 @@ def main():
     else:
         remap = None
         if args.src_names:
-            src_names = load_classes(args.src_names)["names"]
+            src_names = load_classes(args.src_names)["source_names"]
             remap = {i: name_to_id(norm_label(n)) for i, n in enumerate(src_names)}
             remap = {k: v for k, v in remap.items() if v is not None}
         items = parse_yolo(args.src, args.group_regex, remap)
@@ -170,8 +173,9 @@ def main():
         lines = []
         for c, pts in objs:
             pts = [(min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)) for x, y in pts]
-            lines.append(f"{c} " + " ".join(f"{x:.6f} {y:.6f}" for x, y in pts))
             counts[c] += 1
+            if s2t[c] is not None:  # ignored source classes (e.g. traffic_sign) become background
+                lines.append(f"{s2t[c]} " + " ".join(f"{x:.6f} {y:.6f}" for x, y in pts))
         lp.write_text("\n".join(lines) + ("\n" if lines else ""))
         rows.append([str(dst), group, 0, w, h, sum(counts), *counts])
         if n % 5000 == 0:
@@ -191,12 +195,16 @@ def main():
         wr.writerows(rows)
 
     totals = [sum(r[6 + i] for r in rows) for i in range(len(names))]
-    report = [f"images: {len(rows)}  groups: {len({r[1] for r in rows})}", "instances per class:"]
-    report += [f"  {i:2d} {n:26s} {totals[i]}" for i, n in enumerate(names)]
+    train_totals = [sum(t for t, k in zip(totals, s2t) if k == j) for j in range(len(train_names))]
+    report = [f"images: {len(rows)}  groups: {len({r[1] for r in rows})}", "instances per source class:"]
+    report += [f"  {i:2d} {n:26s} {totals[i]:>8d}  -> {train_names[s2t[i]] if s2t[i] is not None else '(ignored)'}"
+               for i, n in enumerate(names)]
+    report += ["instances per training class:"]
+    report += [f"  {j:2d} {n:26s} {train_totals[j]:>8d}" for j, n in enumerate(train_names)]
     report += [f"dropped labels (not in classes.yaml): {dict(dropped.most_common())}",
                f"annotated images without a file: {len(missing)}", *[f"  {m}" for m in missing[:50]]]
     (args.out / "prepare_report.txt").write_text("\n".join(report) + "\n")
-    print("\n".join(report[:2 + len(names) + 2]))
+    print("\n".join(report[:3 + len(names) + len(train_names) + 2]))
     print(f"[prepare] wrote {args.out / 'index.csv'}")
 
 

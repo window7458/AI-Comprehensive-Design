@@ -26,28 +26,84 @@
   추론 때도 teacher가 돌아가므로 배포용이 아니라 “teacher 정보를 직접 넣으면 어디까지 올라가나”를 보는 **상한선**이다.
 - teacher는 모두 frozen이고 입력은 긴 변 512 px (ViT-B/16 기준 32×32 토큰)이다. 학습 이미지(모자이크 증강 포함)를 그대로 넣는다.
 
+## 데이터: AI Hub 189 인도보행 Polygon, 26 → 10 클래스
+
+### 원본 클래스별 분포 (26종)
+
+| # | 클래스 | 인스턴스 | 비율 | 이미지 수 | 폴더 수 | → 학습 클래스 |
+|---:|---|---:|---:|---:|---:|---|
+| 1 | car | 147,132 | 23.69% | 55,957 | 1,800 | car |
+| 2 | pole | 98,463 | 15.86% | 57,432 | 1,839 | obstacle |
+| 3 | tree_trunk | 97,018 | 15.62% | 44,494 | 1,813 | obstacle |
+| 4 | person | 47,192 | 7.60% | 26,149 | 1,691 | person |
+| 5 | traffic_sign | 38,918 | 6.27% | 21,298 | 1,748 | *(제외)* |
+| 6 | bollard | 37,266 | 6.00% | 13,906 | 1,605 | obstacle |
+| 7 | truck | 33,211 | 5.35% | 20,190 | 1,647 | other_vehicle |
+| 8 | traffic_light | 26,799 | 4.32% | 11,107 | 1,374 | traffic_light |
+| 9 | movable_signage | 20,203 | 3.25% | 12,059 | 1,419 | obstacle |
+| 10 | bus | 11,321 | 1.82% | 6,484 | 1,323 | bus |
+| 11 | bicycle | 10,003 | 1.61% | 6,581 | 1,367 | bicycle |
+| 12 | motorcycle | 9,039 | 1.46% | 6,731 | 1,261 | motorcycle |
+| 13 | potted_plant\* | 9,031 | 1.45% | 4,300 | 1,074 | obstacle |
+| 14 | bench | 6,215 | 1.00% | 3,225 | 756 | obstacle |
+| 15 | power_controller | 5,262 | 0.85% | 3,446 | 876 | obstacle |
+| 16 | barricade | 4,323 | 0.70% | 1,991 | 711 | obstacle |
+| 17 | stop | 4,311 | 0.69% | 3,720 | 855 | obstacle |
+| 18 | traffic_light_controller | 3,986 | 0.64% | 3,469 | 1,035 | obstacle |
+| 19 | chair | 3,643 | 0.59% | 2,101 | 824 | obstacle |
+| 20 | fire_hydrant | 2,593 | 0.42% | 2,290 | 864 | obstacle |
+| 21 | carrier | 1,479 | 0.24% | 1,159 | 575 | other_vehicle |
+| 22 | table | 1,317 | 0.21% | 860 | 400 | obstacle |
+| 23 | kiosk | 1,198 | 0.19% | 947 | 448 | obstacle |
+| 24 | stroller | 485 | 0.08% | 429 | 232 | other_vehicle |
+| **25** | **scooter** | **351** | **0.06%** | **224** | **124** | **scooter** |
+| 26 | wheelchair | 204 | 0.03% | 176 | 102 | other_vehicle |
+| | 합계 | 620,963 | 100% | | | |
+
+\* potted_plant는 원본 캡처가 잘려 근삿값.
+
+### 10클래스 매핑 후 분포 (학습·평가 클래스)
+
+| id | 학습 클래스 | 인스턴스 | 비율 | 합쳐진 원본 클래스 |
+|---:|---|---:|---:|---|
+| 0 | obstacle | 294,829 | 47.5% | 14종: pole, tree_trunk, bollard, movable_signage, potted_plant, bench, power_controller, barricade, stop, traffic_light_controller, chair, fire_hydrant, table, kiosk |
+| 1 | car | 147,132 | 23.7% | car |
+| 2 | person | 47,192 | 7.6% | person |
+| 3 | other_vehicle | 35,379 | 5.7% | truck, carrier, stroller, wheelchair |
+| 4 | traffic_light | 26,799 | 4.3% | traffic_light |
+| 5 | bus | 11,321 | 1.8% | bus |
+| 6 | bicycle | 10,003 | 1.6% | bicycle |
+| 7 | motorcycle | 9,039 | 1.5% | motorcycle |
+| 8 | **scooter** | **351** | **0.06%** | scooter |
+| 9 | **stairs** | **0** | – | 없음 (Surface의 caution_zone) |
+| – | *(traffic_sign)* | *38,918* | *6.3%* | 미매핑 — 현재 제외 상태 |
+
+- 매핑은 `configs/classes.yaml`의 `map` / `ignore`에 있고, `prepare_dataset.py`가 라벨을 **10클래스 id로** 쓴다.
+  traffic_sign 폴리곤은 라벨에서 빠지므로 배경으로 학습된다. 원본에 있지만 표에 없는 라벨(cat, dog, parking_meter 등)도 버리고 개수만 기록한다.
+- **stairs는 Polygon 데이터에 인스턴스가 0개**다. 클래스 자리(id 9)만 잡아 두었고 AP는 계산되지 않는다(요약표에서 빈칸).
+  Surface 데이터의 caution_zone을 붙이기 전까지 파일럿 결과에는 영향이 없다.
+- 요약표에 따로 나오는 평균: **key mAP** = obstacle, car, person, traffic_light, bus, bicycle, motorcycle (보행 안전 핵심),
+  **rare mAP** = scooter, motorcycle, bicycle, bus (인스턴스 2% 미만). scooter AP는 별도 열로도 나온다.
+
+원본 표 이미지: [26종 분포](docs/class_distribution_26.webp), [10클래스 매핑](docs/class_mapping_10.webp)
+
 ## 데이터 선택: 랜덤 대신 클래스 균형 + 시퀀스 단위
 
-![class distribution](docs/class_distribution.png)
-
-클래스 분포가 매우 치우쳐 있다(car 147k 인스턴스 ↔ scooter 351, wheelchair 204).
-무작위로 뽑으면 파일럿 부분집합에 scooter가 거의 들어가지 않는다. 또 영상 프레임이라 인접 프레임이 거의 같은 이미지다.
-그래서 `tools/make_subset.py`는 다음 순서로 뽑는다.
+분포가 매우 치우쳐 있다(obstacle 29.5만 ↔ scooter 351). 무작위로 뽑으면 파일럿 부분집합에 scooter가 거의 들어가지 않는다.
+또 영상 프레임이라 인접 프레임이 거의 같은 이미지다. 그래서 `tools/make_subset.py`는 다음 순서로 뽑는다.
+균형은 **원본 25종**(제외한 traffic_sign 빼고) 기준으로 맞춘다. 그래야 other_vehicle 안의 wheelchair·stroller, obstacle 안의 kiosk·table처럼
+합쳐진 클래스 속 희귀 원본 클래스도 골고루 들어간다. 모델은 10클래스 라벨로 학습한다.
 
 1. **시퀀스(폴더) 단위 train/val/test 분할** (기본 75/15/10). 희귀 클래스부터 배치하는 iterative stratification이라
    scooter·wheelchair·stroller도 모든 split에 비율대로 들어가고, 같은 영상의 프레임이 split을 넘나들지 않는다.
    분할 결과는 `splits/groups.json`에 저장되며 **파일럿과 전체 실험이 같은 분할을 쓴다** (test 시퀀스는 끝까지 보지 않는다).
-2. **quota 단계**: 희귀 클래스부터 클래스마다 최소 `--min-train-per-class`(기본 300)장이 될 때까지 해당 클래스가 있는 이미지를 고른다.
-   300장보다 적은 클래스(scooter 224장 등)는 **전부** 들어간다. 후보는 시간축으로 고르게 솎고, 같은 시퀀스에서 많이 뽑을수록 점수를 깎는다.
+2. **quota 단계**: 희귀 클래스부터 원본 클래스마다 최소 `--min-train-per-class`(기본 300)장이 될 때까지 해당 클래스가 있는 이미지를 고른다.
+   300장보다 적은 클래스(scooter 224장, wheelchair 176장)는 **전부** 들어간다. 후보는 시간축으로 고르게 솎고, 같은 시퀀스에서 많이 뽑을수록 점수를 깎는다.
 3. **fill 단계**: 남은 예산은 repeat-factor 가중치(`max_c sqrt(t / f_c)`)로 뽑아서 흔한 클래스만 있는 이미지 비중을 줄인다.
 4. **RFS**(LVIS repeat-factor sampling, `--rfs-t 0.1`): 희귀 클래스가 있는 train 이미지를 `train.txt`에 여러 번 적는다. 모든 실험에 똑같이 적용된다.
 
-결과는 `subset_report.md` / `.csv`에 클래스별로(전체 / train / val / test / RFS 적용 후) 남는다.
+결과는 `subset_report.md`에 **10클래스 표**와 **원본 클래스 표**로 남는다(전체 / train / val / test / RFS 적용 후).
 실제 규모(9만 장, 1,900 시퀀스)의 가짜 인덱스로 돌려 보면 약 1초가 걸리고, scooter는 이미지 235장이 모두 쓰인다(train 172 / val 38 / test 25, RFS 후 train 인스턴스 587).
-
-**클래스 설정**은 `configs/classes.yaml`에 있다. 표의 26개 클래스 id 순서를 그대로 쓰고,
-`key_classes`(표의 파란 박스: car, pole, person, traffic_sign, traffic_light, movable_signage, bus, bicycle, motorcycle)와
-`rare_classes`(scooter 등)는 요약표에 **key mAP / rare mAP**로 따로 나온다. 표에 없는 원본 라벨(cat, dog, parking_meter 등)은 버리고 개수를 기록한다.
 
 ## 몬드리안 AI 서버에서 실행
 
@@ -72,7 +128,7 @@ tail -f pilot.log
   - **CVAT XML** (AI-Hub 인도보행 Polygon 원본: 시퀀스 폴더 + `<image><polygon label points>` XML)
   - **YOLO-seg** (`.../images/*.jpg` + `.../labels/*.txt`). 이 경우 시퀀스는 이미지의 상위 폴더 이름,
     또는 `python tools/prepare_dataset.py --group-regex '^(.*)_\d+$'` 처럼 파일명에서 뽑는다.
-    원본 클래스 id 순서가 다르면 `--src-names <원본 data.yaml>`을 주면 이름으로 다시 매핑한다.
+    YOLO 라벨은 **원본 26종 id**(`source_names` 순서)여야 한다. 순서가 다르면 `--src-names <원본 data.yaml>`을 주면 이름으로 다시 매핑한다.
 - 원본 이미지는 복사하지 않고 심볼릭 링크를 건다(`--link copy`로 변경 가능).
 - 한 실험만 돌리기: `python tools/train.py --exp B2 --data data/processed/splits/pilot/data.yaml --project runs/pilot`
 - A-best teacher를 직접 지정: `python tools/train.py --exp A-best --teacher dinov3_b ...`
@@ -114,7 +170,7 @@ EXPS="E0 B2" nohup bash scripts/run_full.sh > full.log 2>&1 &    # B2 자리에 
 ## 구조
 
 ```
-configs/   classes.yaml (26 클래스·key/rare), experiments.yaml (E0/B1–B5/A-best)
+configs/   classes.yaml (원본 26종 → 학습 10클래스 매핑, key/rare), experiments.yaml (E0/B1–B5/A-best)
 kdseg/     teachers.py (SigLIP2 / DINOv3 / DINOv2 / RADIO 래퍼), models.py (DistillSegModel, FusionSegModel, student 추출)
 tools/     prepare_dataset.py → make_subset.py → train.py / run_experiments.py → summarize.py, check_teachers.py
 scripts/   setup_mondrian.sh, download_data.sh, run_pilot.sh, run_full.sh

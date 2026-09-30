@@ -172,11 +172,16 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    names = load_classes(args.classes)["names"]
+    cls = load_classes(args.classes)
     df = pd.read_csv(args.data / "index.csv")
-    missing = [n for n in names if n not in df.columns]
+    missing = [n for n in cls["source_names"] if n not in df.columns]
     if missing:
         raise SystemExit(f"index.csv lacks class columns {missing}; re-run prepare_dataset.py with the same classes")
+    # balance on the fine source classes that are actually trained (ignored ones such as traffic_sign are skipped)
+    names = [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t is not None]
+    train_names = cls["names"]
+    members = {j: [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t == j]
+               for j in range(len(train_names))}
 
     gfile = args.data / "splits" / "groups.json"
     ratios = {"train": 1 - args.val_ratio - args.test_ratio, "val": args.val_ratio, "test": args.test_ratio}
@@ -213,32 +218,42 @@ def main():
         "train": str((args.out / "train.txt").resolve()),
         "val": str((args.out / "val.txt").resolve()),
         "test": str((args.out / "test.txt").resolve()),
-        "names": dict(enumerate(names)),
+        "names": dict(enumerate(train_names)),
     }
     (args.out / "data.yaml").write_text(yaml.safe_dump(data_yaml, sort_keys=False, allow_unicode=True))
 
-    # report
-    rows = []
-    for i, n in enumerate(names):
-        r = {"id": i, "class": n, "all_inst": int(df[n].sum()), "all_img": int((df[n] > 0).sum()),
-             "all_seq": int(df.loc[df[n] > 0, "group"].nunique())}
+    # report: source classes (what the sampler balances) and training classes (what the model sees)
+    def class_row(label, cols, **extra):
+        has = lambda d: d[cols].sum(axis=1) > 0 if cols else pd.Series(False, index=d.index)  # noqa: E731
+        inst = lambda d: int(d[cols].to_numpy().sum()) if cols else 0  # noqa: E731
+        r = {**extra, "class": label, "all_inst": inst(df), "all_img": int(has(df).sum()),
+             "all_seq": int(df.loc[has(df), "group"].nunique())}
         for s, part in chosen.items():
-            r[f"{s}_img"] = int((part[n] > 0).sum())
-            r[f"{s}_inst"] = int(part[n].sum())
-        r["train_inst_rfs"] = int((chosen["train"][n] * chosen["train"]["repeat"]).sum())
-        rows.append(r)
-    rep = pd.DataFrame(rows).sort_values("all_inst", ascending=False)
-    rep.to_csv(args.out / "subset_report.csv", index=False)
+            r[f"{s}_img"], r[f"{s}_inst"] = int(has(part).sum()), inst(part)
+        tr = chosen["train"]
+        r["train_inst_rfs"] = int((tr[cols].sum(axis=1) * tr["repeat"]).sum()) if cols else 0
+        return r
+
+    t_rows = [class_row(n, members[j], id=j, merged=", ".join(members[j]) or "-") for j, n in enumerate(train_names)]
+    s_rows = [class_row(n, [n], train_class=train_names[t])
+              for n, t in zip(cls["source_names"], cls["source_to_train"]) if t is not None]
+    t_rep = pd.DataFrame(t_rows)
+    t_rep = t_rep[["id", "class", *[c for c in t_rep.columns if c not in ("id", "class", "merged")], "merged"]]
+    s_rep = pd.DataFrame(s_rows).sort_values("all_inst", ascending=False)
+    t_rep.to_csv(args.out / "subset_report.csv", index=False)
+    s_rep.to_csv(args.out / "subset_report_source.csv", index=False)
     md = ["# Subset report", "",
-          f"budgets: {budgets}, min per class: {mins}, rfs_t: {args.rfs_t}, seed: {args.seed}", "",
-          to_markdown(rep)]
-    empty = [f"{r['class']}({s})" for r in rows for s in ("val", "test") if ratios[s] > 0 and r[f"{s}_inst"] == 0]
+          f"budgets: {budgets}, min per source class: {mins}, rfs_t: {args.rfs_t}, seed: {args.seed}", "",
+          "## Training classes", "", to_markdown(t_rep), "",
+          "## Source classes (balancing level)", "", to_markdown(s_rep)]
+    empty = [f"{r['class']}({s})" for r in t_rows for s in SPLITS if ratios[s] > 0 and r[f"{s}_inst"] == 0]
     if empty:
-        md += ["", f"**WARNING** classes without instances: {', '.join(empty)}"]
+        md += ["", f"**WARNING** training classes without instances: {', '.join(empty)} "
+                   "(stairs is expected to be empty until Surface caution_zone data is added)"]
     (args.out / "subset_report.md").write_text("\n".join(md) + "\n")
-    print(rep.to_string(index=False))
+    print(t_rep.to_string(index=False))
     if empty:
-        print(f"[subset] WARNING classes without instances: {', '.join(empty)}")
+        print(f"[subset] WARNING training classes without instances: {', '.join(empty)}")
     print(f"[subset] wrote {args.out / 'data.yaml'}")
 
 

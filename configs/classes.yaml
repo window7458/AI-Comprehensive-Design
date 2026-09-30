@@ -1,6 +1,13 @@
-# AI-Hub 인도보행(Sidewalk) Polygon — the 26 classes from the class-distribution table.
-# The id order MUST match the class ids you already use (the table's first column).
-names:
+# AI-Hub 189 인도보행 Polygon: 26 source classes -> 10 training classes.
+#
+# source_names : raw annotation classes (id order = the ids already used in converted YOLO labels).
+#                Sampling / balancing is done at this fine level, so rare members of a merged class
+#                (wheelchair, stroller inside other_vehicle; kiosk, table inside obstacle) are still covered.
+# names        : the 10 classes the model is trained and evaluated on.
+# map          : training class -> source classes merged into it.
+# ignore       : source classes that are dropped (their polygons become background).
+
+source_names:
   0: pole
   1: person
   2: movable_signage
@@ -28,8 +35,34 @@ names:
   24: bench
   25: wheelchair
 
-# Label aliases found in raw annotations -> canonical name (lower-cased, spaces -> "_").
-# Raw labels that are neither a name nor an alias (e.g. cat, dog, parking_meter) are dropped and counted.
+names:
+  0: obstacle
+  1: car
+  2: person
+  3: other_vehicle
+  4: traffic_light
+  5: bus
+  6: bicycle
+  7: motorcycle
+  8: scooter
+  9: stairs
+
+map:
+  obstacle: [pole, tree_trunk, bollard, movable_signage, potted_plant, bench, power_controller, barricade, stop,
+             traffic_light_controller, chair, fire_hydrant, table, kiosk]          # 14 classes, 294,829
+  car: [car]                                                                        # 147,132
+  person: [person]                                                                  # 47,192
+  other_vehicle: [truck, carrier, stroller, wheelchair]                             # 35,379
+  traffic_light: [traffic_light]                                                    # 26,799
+  bus: [bus]                                                                        # 11,321
+  bicycle: [bicycle]                                                                # 10,003
+  motorcycle: [motorcycle]                                                          # 9,039
+  scooter: [scooter]                                                                # 351  (0.06%)
+  stairs: []            # 0 in Polygon data — comes from Surface caution_zone, not added yet
+
+ignore: [traffic_sign]  # 38,918 — unmapped, currently excluded
+
+# Raw label spellings -> source name (lower-cased; spaces are also tried as "_").
 aliases:
   potted plant: potted_plant
   tree trunk: tree_trunk
@@ -40,10 +73,6 @@ aliases:
   power controller: power_controller
   traffic light controller: traffic_light_controller
 
-# Safety-critical classes for visually-impaired walking assistance (blue boxes in the table).
-# Reported as a separate "key mAP" in the summary.
-key_classes: [car, pole, person, traffic_sign, traffic_light, movable_signage, bus, bicycle, motorcycle]
-
-# Rare classes (≤ ~1.5k instances). The sampler guarantees all of them get as much coverage as possible;
-# reported as a separate "rare mAP". scooter is the hardest one (351 instances / 224 images).
-rare_classes: [scooter, wheelchair, stroller, kiosk, table, carrier, fire_hydrant]
+# Reported as separate means in the summary (training-class names).
+key_classes: [obstacle, car, person, traffic_light, bus, bicycle, motorcycle]   # walking-safety core classes
+rare_classes: [scooter, motorcycle, bicycle, bus]                                # < 2% of instances

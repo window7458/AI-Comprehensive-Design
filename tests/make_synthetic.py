@@ -31,7 +31,7 @@ def main():
     ap.add_argument("--frames", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
-    names = load_classes("configs/classes.yaml")["names"]
+    names = load_classes("configs/classes.yaml")["source_names"]
     rng = np.random.default_rng(args.seed)
     p = np.array([REAL_INSTANCES[n] for n in names], dtype=float) ** 0.7
     p /= p.sum()
