@@ -1,0 +1,49 @@
+# AI-Hub 인도보행(Sidewalk) Polygon — the 26 classes from the class-distribution table.
+# The id order MUST match the class ids you already use (the table's first column).
+names:
+  0: pole
+  1: person
+  2: movable_signage
+  3: chair
+  4: motorcycle
+  5: potted_plant
+  6: tree_trunk
+  7: car
+  8: bicycle
+  9: bollard
+  10: truck
+  11: carrier
+  12: barricade
+  13: stroller
+  14: fire_hydrant
+  15: table
+  16: traffic_sign
+  17: traffic_light
+  18: traffic_light_controller
+  19: kiosk
+  20: scooter
+  21: bus
+  22: stop
+  23: power_controller
+  24: bench
+  25: wheelchair
+
+# Label aliases found in raw annotations -> canonical name (lower-cased, spaces -> "_").
+# Raw labels that are neither a name nor an alias (e.g. cat, dog, parking_meter) are dropped and counted.
+aliases:
+  potted plant: potted_plant
+  tree trunk: tree_trunk
+  traffic sign: traffic_sign
+  traffic light: traffic_light
+  movable signage: movable_signage
+  fire hydrant: fire_hydrant
+  power controller: power_controller
+  traffic light controller: traffic_light_controller
+
+# Safety-critical classes for visually-impaired walking assistance (blue boxes in the table).
+# Reported as a separate "key mAP" in the summary.
+key_classes: [car, pole, person, traffic_sign, traffic_light, movable_signage, bus, bicycle, motorcycle]
+
+# Rare classes (≤ ~1.5k instances). The sampler guarantees all of them get as much coverage as possible;
+# reported as a separate "rare mAP". scooter is the hardest one (351 instances / 224 images).
+rare_classes: [scooter, wheelchair, stroller, kiosk, table, carrier, fire_hydrant]

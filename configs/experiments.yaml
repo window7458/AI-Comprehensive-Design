@@ -1,0 +1,41 @@
+# Pilot experiment matrix. Every run shares `common`; only the teacher / track changes.
+# Override anything from the CLI, e.g.  python tools/train.py --exp B1 --set epochs=100 batch=32
+
+common:
+  model: yolo11s-seg.pt      # COCO-pretrained student (auto-downloaded by Ultralytics)
+  imgsz: 640
+  epochs: 60
+  batch: 16
+  workers: 8
+  patience: 20
+  seed: 0
+  optimizer: auto
+  close_mosaic: 10
+  cache: false               # "ram" speeds things up if the pilot subset fits in memory
+
+# Feature distillation (track B). Student layers 4 / 6 / 10 = YOLO11s backbone P3 / P4 / P5.
+distill:
+  layers: [4, 6, 10]
+  weight: 1.0                # multiplier on the KD loss (1 - cosine similarity, averaged)
+  loss: cosine               # cosine | mse
+  teacher_res: 512           # teacher input long side (ViT-B/16 -> 32x32 tokens)
+
+# Feature fusion (track A). Frozen teacher also runs at inference -> upper-bound reference only.
+fusion:
+  layers: [4, 6, 10]
+  teacher_res: 512
+
+experiments:
+  E0: {track: baseline, desc: "YOLO11s-seg baseline"}
+  B1: {track: distill, teachers: [siglip2_b], desc: "SigLIP2-B"}
+  B2: {track: distill, teachers: [dinov3_b], desc: "DINOv3-B"}
+  B2b: {track: distill, teachers: [dinov2_b], desc: "DINOv2-B (optional)", optional: true}
+  B3: {track: distill, teachers: [dinov3_b, siglip2_b], desc: "DINOv3-B + SigLIP2-B"}
+  B4: {track: distill, teachers: [radio_v2.5_b], desc: "RADIOv2.5-B"}
+  B5: {track: distill, teachers: [cradio_v3_b], desc: "C-RADIOv3-B"}
+  B5b: {track: distill, teachers: [cradio_v4_so400m], desc: "C-RADIOv4-SO400M (optional)", optional: true}
+  # teacher: auto -> the single-teacher B* run with the best val mask mAP50-95
+  A-best: {track: fusion, teacher: auto, desc: "Fusion with the best pilot encoder (upper bound)"}
+
+# Order used by tools/run_experiments.py (optional runs only with --with-optional).
+order: [E0, B1, B2, B2b, B3, B4, B5, B5b, A-best]

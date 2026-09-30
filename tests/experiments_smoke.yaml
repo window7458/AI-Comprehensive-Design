@@ -1,0 +1,10 @@
+# CPU smoke test: tiny model/images, random "dummy" teacher (no downloads needed except none).
+common: {model: yolo11s-seg.yaml, imgsz: 160, epochs: 1, batch: 4, workers: 0, patience: 5, seed: 0,
+         optimizer: auto, close_mosaic: 0, cache: false, plots: false, amp: false}
+distill: {layers: [4, 6, 10], weight: 1.0, loss: cosine, teacher_res: 64}
+fusion: {layers: [4, 6, 10], teacher_res: 64}
+experiments:
+  E0: {track: baseline, desc: baseline}
+  B1: {track: distill, teachers: [dummy], desc: dummy distill}
+  A-best: {track: fusion, teacher: auto, desc: dummy fusion}
+order: [E0, B1, A-best]

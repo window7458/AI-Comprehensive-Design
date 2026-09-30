@@ -1,1 +1,130 @@
-# -
+# 인공지능 종합설계 — 시각장애인 보행 보조를 위한 YOLO11s-seg 지식증류 파일럿
+
+보도 위 장애물(기둥, 볼라드, 킥보드, 사람, 차량 …)을 **실시간 인스턴스 분할**하는 경량 모델(YOLO11s-seg)에
+대형 비전 파운데이션 모델(VFM)의 표현을 **학습 때만** 증류해서, 추론 비용은 그대로 두고 성능을 올리는 것이 목표다.
+이 저장소는 **어떤 teacher가 가장 좋은지 고르는 파일럿**을 한 번에 돌리는 코드다.
+파일럿에서 고른 설정으로 전체 데이터 실험을 이어서 돌린다.
+
+## 실험 구성
+
+| ID | 트랙 | teacher / 인코더 | 추론 시 teacher 사용 |
+|---|---|---|---|
+| E0 | – | YOLO11s-seg baseline | ✗ |
+| B1 | Distill | SigLIP2-B (`google/siglip2-base-patch16-512`) | ✗ |
+| B2 | Distill | DINOv3-B (`facebook/dinov3-vitb16-pretrain-lvd1689m`) | ✗ |
+| B2b *(선택)* | Distill | DINOv2-B (`facebook/dinov2-base`) | ✗ |
+| B3 | Distill | DINOv3-B + SigLIP2-B 결합 teacher | ✗ |
+| B4 | Distill | RADIOv2.5-B | ✗ |
+| B5 | Distill | C-RADIOv3-B | ✗ |
+| B5b *(선택)* | Distill | C-RADIOv4-SO400M (추론에 안 쓰니 teacher가 커도 됨) | ✗ |
+| A-best | Fusion | B1–B5 중 val mask mAP가 가장 높은 **단일** 인코더 → 상한 비교용 | ✓ |
+
+- **Distill (B\*)**: 학생 백본의 P3/P4/P5 (YOLO11s 4·6·10번 층) 출력을 1×1 conv adapter로 teacher 차원에 맞춘 뒤,
+  teacher의 patch feature map과 **위치별 코사인 유사도 손실**(`1 - cos`)을 준다. 결합 teacher(B3)는 teacher마다 adapter를 따로 두고 손실을 평균낸다.
+  학습이 끝나면 adapter를 떼어 낸 **일반 YOLO11s-seg 체크포인트(`student.pt`)** 를 저장하고, 평가도 이 파일로 한다. 배포 모델의 연산량은 E0와 같다.
+- **Fusion (A-best)**: 고정된 teacher feature를 같은 층에 `BN(1×1 conv)`로 더한다. BN의 γ를 0으로 초기화해서 시작 상태가 baseline과 같다.
+  추론 때도 teacher가 돌아가므로 배포용이 아니라 “teacher 정보를 직접 넣으면 어디까지 올라가나”를 보는 **상한선**이다.
+- teacher는 모두 frozen이고 입력은 긴 변 512 px (ViT-B/16 기준 32×32 토큰)이다. 학습 이미지(모자이크 증강 포함)를 그대로 넣는다.
+
+## 데이터 선택: 랜덤 대신 클래스 균형 + 시퀀스 단위
+
+![class distribution](docs/class_distribution.png)
+
+클래스 분포가 매우 치우쳐 있다(car 147k 인스턴스 ↔ scooter 351, wheelchair 204).
+무작위로 뽑으면 파일럿 부분집합에 scooter가 거의 들어가지 않는다. 또 영상 프레임이라 인접 프레임이 거의 같은 이미지다.
+그래서 `tools/make_subset.py`는 다음 순서로 뽑는다.
+
+1. **시퀀스(폴더) 단위 train/val/test 분할** (기본 75/15/10). 희귀 클래스부터 배치하는 iterative stratification이라
+   scooter·wheelchair·stroller도 모든 split에 비율대로 들어가고, 같은 영상의 프레임이 split을 넘나들지 않는다.
+   분할 결과는 `splits/groups.json`에 저장되며 **파일럿과 전체 실험이 같은 분할을 쓴다** (test 시퀀스는 끝까지 보지 않는다).
+2. **quota 단계**: 희귀 클래스부터 클래스마다 최소 `--min-train-per-class`(기본 300)장이 될 때까지 해당 클래스가 있는 이미지를 고른다.
+   300장보다 적은 클래스(scooter 224장 등)는 **전부** 들어간다. 후보는 시간축으로 고르게 솎고, 같은 시퀀스에서 많이 뽑을수록 점수를 깎는다.
+3. **fill 단계**: 남은 예산은 repeat-factor 가중치(`max_c sqrt(t / f_c)`)로 뽑아서 흔한 클래스만 있는 이미지 비중을 줄인다.
+4. **RFS**(LVIS repeat-factor sampling, `--rfs-t 0.1`): 희귀 클래스가 있는 train 이미지를 `train.txt`에 여러 번 적는다. 모든 실험에 똑같이 적용된다.
+
+결과는 `subset_report.md` / `.csv`에 클래스별로(전체 / train / val / test / RFS 적용 후) 남는다.
+실제 규모(9만 장, 1,900 시퀀스)의 가짜 인덱스로 돌려 보면 약 1초가 걸리고, scooter는 이미지 235장이 모두 쓰인다(train 172 / val 38 / test 25, RFS 후 train 인스턴스 587).
+
+**클래스 설정**은 `configs/classes.yaml`에 있다. 표의 26개 클래스 id 순서를 그대로 쓰고,
+`key_classes`(표의 파란 박스: car, pole, person, traffic_sign, traffic_light, movable_signage, bus, bicycle, motorcycle)와
+`rare_classes`(scooter 등)는 요약표에 **key mAP / rare mAP**로 따로 나온다. 표에 없는 원본 라벨(cat, dog, parking_meter 등)은 버리고 개수를 기록한다.
+
+## 몬드리안 AI 서버에서 실행
+
+```bash
+git clone <this repo> && cd <repo>
+bash scripts/setup_mondrian.sh                 # 패키지 설치 + yolo11s-seg.pt 미리 받기
+export HF_TOKEN=hf_xxx                         # DINOv3는 gated → HF 페이지에서 라이선스 동의 후 토큰 발급
+
+# 1) 구글 드라이브 데이터 받기 ("링크가 있는 모든 사용자" 공유, zip/tar 권장 — gdown은 폴더당 50개 파일 제한)
+GDRIVE_URL="https://drive.google.com/file/d/<id>/view" bash scripts/download_data.sh     # → data/raw
+
+# 2) 파일럿 전체 (전처리 → 균형 샘플링 → teacher 점검 → E0,B1..B5,A-best → 요약)
+nohup bash scripts/run_pilot.sh > pilot.log 2>&1 &
+tail -f pilot.log
+```
+
+`run_pilot.sh` 환경 변수: `RAW`, `DATA`, `PROJECT`, `TRAIN_IMAGES`(기본 6000), `VAL_IMAGES`(1500), `DEVICE`(0),
+`EXTRA`(예: `"epochs=40 batch=32"`), `OPTIONAL=1`(B2b·B5b 추가).
+중간에 끊겨도 다시 실행하면 `results.json`이 있는 실험은 건너뛴다. 실험마다 별도 프로세스라 하나가 실패해도 다음 실험은 계속 돈다.
+
+- 데이터가 이미 서버에 있으면 `RAW=/path/to/data`만 지정한다. 입력 형식은 자동으로 감지한다.
+  - **CVAT XML** (AI-Hub 인도보행 Polygon 원본: 시퀀스 폴더 + `<image><polygon label points>` XML)
+  - **YOLO-seg** (`.../images/*.jpg` + `.../labels/*.txt`). 이 경우 시퀀스는 이미지의 상위 폴더 이름,
+    또는 `python tools/prepare_dataset.py --group-regex '^(.*)_\d+$'` 처럼 파일명에서 뽑는다.
+    원본 클래스 id 순서가 다르면 `--src-names <원본 data.yaml>`을 주면 이름으로 다시 매핑한다.
+- 원본 이미지는 복사하지 않고 심볼릭 링크를 건다(`--link copy`로 변경 가능).
+- 한 실험만 돌리기: `python tools/train.py --exp B2 --data data/processed/splits/pilot/data.yaml --project runs/pilot`
+- A-best teacher를 직접 지정: `python tools/train.py --exp A-best --teacher dinov3_b ...`
+
+### 결과 보기
+
+```
+runs/pilot/summary_val.md      # 실험별 mask/box mAP, E0 대비 Δ, key mAP, rare mAP, scooter AP, 추론 ms, 학습 시간
+runs/pilot/per_class_val.csv   # 클래스 × 실험 mask mAP50-95
+runs/pilot/<ID>/results.json   # 실험별 상세 결과
+runs/pilot/<ID>/weights/       # best.pt (Distill은 배포용 student.pt 추가)
+runs/pilot/logs/<ID>.log
+```
+
+**선택 기준**: val **mask mAP50-95**가 1순위이고, key mAP(보행 안전 핵심 클래스)와 rare mAP(scooter 등)를 함께 본다.
+A-best는 배포 후보가 아니라 증류로 얼마나 가까이 따라갔는지 비교하는 기준선이다.
+
+## 전체 실험 (파일럿 다음 단계)
+
+```bash
+EXPS="E0 B2" nohup bash scripts/run_full.sh > full.log 2>&1 &    # B2 자리에 파일럿 1등 ID
+```
+
+같은 시퀀스 분할에서 train/val 전체 이미지를 쓰고(`splits/full`), 기본값 `epochs=150 patience=40`으로 학습한 뒤
+처음으로 **test 시퀀스**까지 평가한다(`runs/full/summary_test.md`).
+
+## 기본 하이퍼파라미터 (`configs/experiments.yaml`)
+
+| 항목 | 값 | 비고 |
+|---|---|---|
+| student | `yolo11s-seg.pt` (COCO 사전학습) | Ultralytics 8.4.166 고정 |
+| imgsz / batch / epochs | 640 / 16 / 60 (patience 20) | `--set` 또는 `EXTRA`로 변경 |
+| KD 층 | 4, 6, 10 (P3/P4/P5, stride 8/16/32) | |
+| KD 손실 | `1 - cosine`, weight 1.0 | `loss: mse` 선택 가능 |
+| teacher 입력 | 긴 변 512 px | DINOv2는 patch 14 → 37×37 |
+
+모든 실험은 seed 0, 같은 데이터 목록, 같은 증강을 쓰고 teacher만 바뀐다.
+
+## 구조
+
+```
+configs/   classes.yaml (26 클래스·key/rare), experiments.yaml (E0/B1–B5/A-best)
+kdseg/     teachers.py (SigLIP2 / DINOv3 / DINOv2 / RADIO 래퍼), models.py (DistillSegModel, FusionSegModel, student 추출)
+tools/     prepare_dataset.py → make_subset.py → train.py / run_experiments.py → summarize.py, check_teachers.py
+scripts/   setup_mondrian.sh, download_data.sh, run_pilot.sh, run_full.sh
+tests/     make_synthetic.py, smoke_test.sh (합성 데이터 + 랜덤 teacher로 CPU에서 전체 파이프라인 확인)
+```
+
+## 주의 사항
+
+- **GPU는 1장 기준**이다. teacher를 모델 밖(프로세스 전역)에 두기 때문에 Ultralytics의 멀티 GPU(DDP) 모드는 지원하지 않는다.
+- **RADIO/C-RADIO**는 `torch.hub`(GitHub `NVlabs/RADIO`)에서 먼저 받고, 실패하면 Hugging Face(`nvidia/C-RADIOv3-B` 등)로 받는다. 서버가 GitHub과 HF에 접속할 수 있어야 한다.
+- 긴 학습 전에 `python tools/check_teachers.py`로 모든 teacher가 받아지고 돌아가는지 먼저 확인한다(`run_pilot.sh`는 이 단계를 자동으로 실행한다).
+- 검증 범위: `bash tests/smoke_test.sh`로 데이터 변환 → 샘플링 → E0/Distill/Fusion 학습 → student 추출 → 평가 → 요약까지 CPU에서 통과했다.
+  실제 teacher 가중치 다운로드와 GPU 학습은 개발 환경의 네트워크 제한 때문에 여기서 돌리지 못했다. 서버에서 `check_teachers.py`로 먼저 확인할 것.
