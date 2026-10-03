@@ -15,6 +15,10 @@ Labels are written with the training ids (configs/classes.yaml `map`: 26 source 
 while index.csv keeps the 26 source-class counts so sampling can balance at the fine level.
   OUT/prepare_report.txt         dropped labels / missing images summary
 
+--extra-src adds images from another CVAT-XML dataset (e.g. AI-Hub Surface for stairs = caution_zone/stairs)
+but only images containing --extra-keep classes, and only those polygons. Other objects in those images
+are not annotated there, so they act as background — keep extra data small or review it.
+
 `group` is the video sequence / folder. Consecutive frames of one sequence are near-duplicates,
 so all later splits are done per group to avoid train/val leakage.
 """
@@ -78,9 +82,11 @@ def parse_cvat(src: Path, name_to_id, dropped: Counter, missing: list):
             objs = []
             for p in el.iter("polygon"):
                 lab = norm_label(p.get("label", ""))
-                cid = name_to_id(lab)
+                # "label/attribute" first (Surface: caution_zone + attribute "stairs" -> "caution_zone/stairs")
+                keys = [f"{lab}/{norm_label(a.text or '')}" for a in p.iter("attribute")] + [lab]
+                cid = next((c for c in map(name_to_id, keys) if c is not None), None)
                 if cid is None:
-                    dropped[lab] += 1
+                    dropped[keys[0]] += 1
                     continue
                 pts = [tuple(map(float, xy.split(","))) for xy in p.get("points", "").split(";") if xy]
                 if len(pts) >= 3:
@@ -127,6 +133,10 @@ def main():
     ap.add_argument("--link", choices=["symlink", "copy"], default="symlink")
     ap.add_argument("--group-regex", default=None, help="yolo format: regex on file stem, group(1) = sequence id")
     ap.add_argument("--src-names", default=None, help="yolo format: data.yaml of the source, remap classes by name")
+    ap.add_argument("--extra-src", nargs="*", type=Path, default=[],
+                    help="extra CVAT-XML datasets (e.g. AI-Hub Surface) used only for --extra-keep classes")
+    ap.add_argument("--extra-keep", nargs="*", default=["stairs"],
+                    help="source classes taken from --extra-src; other images/polygons there are skipped")
     args = ap.parse_args()
 
     cls = load_classes(args.classes)
@@ -152,6 +162,20 @@ def main():
             remap = {i: name_to_id(norm_label(n)) for i, n in enumerate(src_names)}
             remap = {k: v for k, v in remap.items() if v is not None}
         items = parse_yolo(args.src, args.group_regex, remap)
+
+    if args.extra_src:
+        keep = {lookup[k] for k in args.extra_keep}
+
+        def with_extra(main_items):
+            yield from main_items
+            for ex in args.extra_src:
+                print(f"[prepare] extra source {ex}: keeping only {args.extra_keep}")
+                for ip, group, w, h, objs in parse_cvat(ex, name_to_id, dropped, missing):
+                    objs = [o for o in objs if o[0] in keep]
+                    if objs:  # only images that contain a kept class
+                        yield ip, f"extra_{group}", w, h, objs
+
+        items = with_extra(items)
 
     out_img, out_lbl = args.out / "images", args.out / "labels"
     rows, seen = [], set()

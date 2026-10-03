@@ -30,8 +30,12 @@ def main():
     ap.add_argument("--groups", type=int, default=24)
     ap.add_argument("--frames", type=int, default=20)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--surface", action="store_true",
+                    help="Surface-style data instead: caution_zone polygons with a stairs/manhole attribute")
     args = ap.parse_args()
-    names = load_classes("configs/classes.yaml")["source_names"]
+    if args.surface:
+        return make_surface(args)
+    names = [n for n in load_classes("configs/classes.yaml")["source_names"] if n in REAL_INSTANCES]
     rng = np.random.default_rng(args.seed)
     p = np.array([REAL_INSTANCES[n] for n in names], dtype=float) ** 0.7
     p /= p.sum()
@@ -60,6 +64,28 @@ def main():
         lines.append("</annotations>")
         (d / f"Polygon_{g:04d}.xml").write_text("\n".join(lines) + "\n")
     print(f"synthetic dataset: {args.groups} groups x {args.frames} frames -> {args.out}")
+
+
+def make_surface(args):
+    """Surface-like CVAT XML: sidewalk + caution_zone (attribute stairs / manhole); no object labels."""
+    rng = np.random.default_rng(args.seed + 1)
+    W, H = 320, 240
+    for g in range(args.groups):
+        d = args.out / f"Surface_{g:04d}"
+        d.mkdir(parents=True, exist_ok=True)
+        lines = ['<?xml version="1.0" encoding="utf-8"?>', "<annotations>"]
+        for k in range(args.frames):
+            name = f"SF_{g:04d}_{k:05d}.jpg"
+            cv2.imwrite(str(d / name), np.full((H, W, 3), 120, np.uint8))
+            lines.append(f'  <image id="{k}" name="{name}" width="{W}" height="{H}">')
+            lines.append('    <polygon label="sidewalk" points="0,200;320,200;320,240;0,240"/>')
+            kind = "stairs" if rng.random() < 0.3 else "manhole"
+            lines.append('    <polygon label="caution_zone" points="100,120;200,120;200,190;100,190">'
+                         f'<attribute name="caution_zone">{kind}</attribute></polygon>')
+            lines.append("  </image>")
+        lines.append("</annotations>")
+        (d / f"Surface_{g:04d}.xml").write_text("\n".join(lines) + "\n")
+    print(f"synthetic Surface dataset: {args.groups} groups x {args.frames} frames -> {args.out}")
 
 
 if __name__ == "__main__":

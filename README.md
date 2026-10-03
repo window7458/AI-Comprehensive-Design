@@ -75,7 +75,7 @@
 | 6 | bicycle | 10,003 | 1.6% | bicycle |
 | 7 | motorcycle | 9,039 | 1.5% | motorcycle |
 | 8 | **scooter** | **351** | **0.06%** | scooter |
-| 9 | **stairs** | **0** | – | 없음 (Surface의 caution_zone) |
+| 9 | **stairs** | **0** | – | stairs (Polygon에는 없음 → Surface의 caution_zone/stairs를 `--extra-src`로 추가) |
 | – | *(traffic_sign)* | *38,918* | *6.3%* | 미매핑 — 현재 제외 상태 |
 
 - 매핑은 `configs/classes.yaml`의 `map` / `ignore`에 있고, `prepare_dataset.py`가 라벨을 **10클래스 id로** 쓴다.
@@ -103,12 +103,44 @@ student는 COCO로 사전학습된 `yolo11s-seg.pt`에서 시작한다. car·per
 
 - 적용 위치: 클래스별 최소 이미지 수(`min-per-class × 가중치`), fill 단계 가중치, RFS 반복 횟수(`sqrt(t × 가중치 / f_c)`).
   모든 실험(E0, B1–B5, A-best)에 똑같이 적용되므로 비교는 공정하다.
-- 9만 장짜리 가짜 인덱스로 6,000장 파일럿을 뽑아 포커스를 끈 경우와 비교했다. traffic_light 이미지는 870 → 1,025장, other_vehicle은 1,934 → 2,199장으로 늘었다.
+- 9만 장짜리 가짜 인덱스로 6,000장 파일럿을 뽑아(아래 `include_all`은 끈 상태) 포커스를 끈 경우와 비교했다. traffic_light 이미지는 870 → 1,025장, other_vehicle은 1,934 → 2,199장으로 늘었다.
   scooter 이미지는 원래 전부(172장) 들어가 있어서 장수는 그대로지만, RFS 반복 후 학습 인스턴스가 568 → 1,014로 늘었다.
 - 요약표에 **focus mAP**(scooter, traffic_light, stairs, obstacle, other_vehicle 평균)와 scooter·traffic_light 열이 따로 나온다.
 - 끄려면 `python tools/make_subset.py ... --no-focus`.
-- **stairs는 Polygon 데이터에 0개라 지금은 학습할 수 없다.** Surface 데이터의 caution_zone(계단)을 변환해 붙여야 한다.
-  Surface 라벨 형식(XML / 마스크 PNG)을 확인한 뒤 `prepare_dataset.py`에 추가할 예정이다.
+
+### 해당 클래스가 든 사진은 전부 사용 (`include_all`)
+
+`include_all: [scooter, stairs, traffic_light, wheelchair, stroller, carrier, kiosk]`에 있는 클래스가 **하나라도 든 사진은 전부** 쓴다.
+사진 예산과 상관없이 먼저 넣고, 그 사진의 시퀀스가 속한 split(train/val/test)에 들어간다. 장수는 모두 **사진 수** 기준이다(한 사진에 신호등이 여러 개여도 1장).
+
+| 클래스 | 오브젝트 | 사진 | 폴더 | 파일럿에 들어가는 사진 |
+|---|---:|---:|---:|---|
+| scooter | 351 | 224 | 124 | 224장 전부 |
+| traffic_light | 26,799 | 11,107 | 1,374 | 11,107장 전부 (train 약 8.3천 장) |
+| wheelchair / stroller / carrier / kiosk | 204 / 485 / 1,479 / 1,198 | 176 / 429 / 1,159 / 947 | | 전부 |
+| stairs | 0 | 0 | 0 | Surface 데이터를 붙이면 전부 |
+
+- traffic_light 사진만 1.1만 장이라 파일럿 train이 커진다. 기본 예산은 train 10,000장 / val 2,500장이고,
+  필수 사진과 클래스별 최소 장수가 넘치면 예산을 넘겨서라도 넣는다.
+  9만 장짜리 가짜 인덱스에서는 train 10,830장(RFS 반복 포함 학습 목록 15,782줄), val 2,500장이 나왔다.
+- 학습 시간이 부담되면 `EXTRA="epochs=30" bash scripts/run_pilot.sh`처럼 epoch를 줄이거나,
+  `make_subset.py --no-include-all`로 끄고 예산 안에서만 뽑는다.
+
+### stairs: AI-Hub Surface 데이터의 caution_zone
+
+stairs는 Polygon 데이터에 **0개**라 Surface(인도 보행 Surface masking) 데이터가 있어야 학습된다.
+`prepare_dataset.py --extra-src <Surface 폴더>`가 CVAT XML에서 `caution_zone` 라벨 + `stairs` 속성(`caution_zone/stairs`)인 폴리곤만 골라
+**계단이 든 사진만** 추가한다. 나머지 Surface 라벨(sidewalk, manhole 등)은 버린다.
+
+```bash
+SURFACE=data/raw_surface bash scripts/run_pilot.sh        # 또는
+python tools/prepare_dataset.py --src data/raw --out data/processed --extra-src data/raw_surface --extra-keep stairs
+```
+
+- Surface 사진 속 차·사람·기둥은 라벨이 없어서 배경으로 학습된다. 계단 사진만 넣는 이유이고, 그래도 수가 많으면 다른 클래스 성능이 떨어질 수 있다.
+- Surface 라벨이 XML이 아니라 마스크 PNG이거나, 계단 표기가 다르면(`classes.yaml`의 `aliases`에 추가) 0개로 나온다.
+  `prepare_report.txt`의 stairs 개수와 버린 라벨 목록을 먼저 확인할 것.
+- 이미 만든 `index.csv`에는 stairs 열이 없다. Surface를 붙일 때는 `data/processed`를 지우고 다시 만든다.
 
 ## 데이터 선택: 랜덤 대신 클래스 균형 + 시퀀스 단위
 
@@ -120,10 +152,11 @@ student는 COCO로 사전학습된 `yolo11s-seg.pt`에서 시작한다. car·per
 1. **시퀀스(폴더) 단위 train/val/test 분할** (기본 75/15/10). 희귀 클래스부터 배치하는 iterative stratification이라
    scooter·wheelchair·stroller도 모든 split에 비율대로 들어가고, 같은 영상의 프레임이 split을 넘나들지 않는다.
    분할 결과는 `splits/groups.json`에 저장되며 **파일럿과 전체 실험이 같은 분할을 쓴다** (test 시퀀스는 끝까지 보지 않는다).
-2. **quota 단계**: 희귀 클래스부터 원본 클래스마다 최소 `--min-train-per-class`(기본 300)장이 될 때까지 해당 클래스가 있는 이미지를 고른다.
+2. **필수 사진**: `include_all` 클래스가 든 사진을 전부 먼저 넣는다(위 참고).
+3. **quota 단계**: 희귀 클래스부터 원본 클래스마다 최소 `--min-train-per-class`(기본 300)장이 될 때까지 해당 클래스가 있는 이미지를 고른다.
    300장보다 적은 클래스(scooter 224장, wheelchair 176장)는 **전부** 들어간다. 후보는 시간축으로 고르게 솎고, 같은 시퀀스에서 많이 뽑을수록 점수를 깎는다.
-3. **fill 단계**: 남은 예산은 repeat-factor 가중치(`max_c sqrt(t / f_c)`)로 뽑아서 흔한 클래스만 있는 이미지 비중을 줄인다.
-4. **RFS**(LVIS repeat-factor sampling, `--rfs-t 0.1`): 희귀 클래스가 있는 train 이미지를 `train.txt`에 여러 번 적는다. 모든 실험에 똑같이 적용된다.
+4. **fill 단계**: 남은 예산은 repeat-factor 가중치(`max_c sqrt(t / f_c)`)로 뽑아서 흔한 클래스만 있는 이미지 비중을 줄인다.
+5. **RFS**(LVIS repeat-factor sampling, `--rfs-t 0.1`): 희귀 클래스가 있는 train 이미지를 `train.txt`에 여러 번 적는다. 모든 실험에 똑같이 적용된다.
 
 결과는 `subset_report.md`에 **10클래스 표**와 **원본 클래스 표**로 남는다(전체 / train / val / test / RFS 적용 후).
 실제 규모(9만 장, 1,900 시퀀스)의 가짜 인덱스로 돌려 보면 약 1초가 걸리고, scooter는 이미지 235장이 모두 쓰인다(train 172 / val 38 / test 25, RFS 후 train 인스턴스 587).
@@ -144,7 +177,7 @@ nohup bash scripts/run_pilot.sh > pilot.log 2>&1 &
 tail -f pilot.log
 ```
 
-`run_pilot.sh` 환경 변수: `RAW`, `DATA`, `PROJECT`, `TRAIN_IMAGES`(기본 6000), `VAL_IMAGES`(1500), `DEVICE`(0),
+`run_pilot.sh` 환경 변수: `RAW`, `SURFACE`(stairs용 Surface 폴더), `DATA`, `PROJECT`, `TRAIN_IMAGES`(기본 10000), `VAL_IMAGES`(2500), `DEVICE`(0),
 `EXTRA`(예: `"epochs=40 batch=32"`), `OPTIONAL=1`(B2b·B5b 추가).
 중간에 끊겨도 다시 실행하면 `results.json`이 있는 실험은 건너뛴다. 실험마다 별도 프로세스라 하나가 실패해도 다음 실험은 계속 돈다.
 

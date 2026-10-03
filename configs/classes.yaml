@@ -34,6 +34,7 @@ source_names:
   23: power_controller
   24: bench
   25: wheelchair
+  26: stairs        # not in Polygon data; from Surface caution_zone via prepare_dataset.py --extra-src
 
 names:
   0: obstacle
@@ -58,7 +59,7 @@ map:
   bicycle: [bicycle]                                                                # 10,003
   motorcycle: [motorcycle]                                                          # 9,039
   scooter: [scooter]                                                                # 351  (0.06%)
-  stairs: []            # 0 in Polygon data — comes from Surface caution_zone, not added yet
+  stairs: [stairs]      # 0 in Polygon data — add AI-Hub Surface with prepare_dataset.py --extra-src
 
 ignore: [traffic_sign]  # 38,918 — unmapped, currently excluded
 
@@ -72,6 +73,8 @@ aliases:
   fire hydrant: fire_hydrant
   power controller: power_controller
   traffic light controller: traffic_light_controller
+  caution_zone/stairs: stairs     # Surface: label caution_zone with attribute "stairs"
+  caution_zone_stairs: stairs
 
 # Fine-tuning focus (source-class names -> priority weight, others = 1).
 # The student starts from COCO weights, so classes COCO never had (scooter, pole, bollard, kiosk,
@@ -93,7 +96,12 @@ focus_weights:
   power_controller: 1.5           # not in COCO
   traffic_light_controller: 1.5   # not in COCO
   stop: 1.5                       # bus stop, not in COCO
-  # stairs: no Polygon data yet (Surface caution_zone) -> nothing to sample
+  stairs: 3.0                     # not in COCO; only present once Surface data is added
+
+# Every photo containing one of these source classes is used (train/val/test of its sequence),
+# on top of the image budget. traffic_light alone is ~11k photos, so the pilot budget grows.
+# `make_subset.py --no-include-all` turns it off.
+include_all: [scooter, stairs, traffic_light, wheelchair, stroller, carrier, kiosk]
 
 # Reported as separate means in the summary (training-class names).
 key_classes: [obstacle, car, person, traffic_light, bus, bicycle, motorcycle]   # walking-safety core classes

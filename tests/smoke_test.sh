@@ -6,7 +6,8 @@ cd "$(dirname "$0")/.."
 T=${T:-/tmp/kdseg_smoke}
 rm -rf "$T"
 python tests/make_synthetic.py --out "$T/raw" --groups 30 --frames 20
-python tools/prepare_dataset.py --src "$T/raw" --out "$T/data"
+python tests/make_synthetic.py --out "$T/surface" --groups 6 --frames 10 --surface
+python tools/prepare_dataset.py --src "$T/raw" --out "$T/data" --extra-src "$T/surface" --extra-keep stairs
 python tools/make_subset.py --data "$T/data" --out "$T/data/splits/pilot" --train-images 200 --val-images 60 \
     --min-train-per-class 20 --min-eval-per-class 5
 python tools/run_experiments.py --data "$T/data/splits/pilot/data.yaml" --project "$T/runs" \

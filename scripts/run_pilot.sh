@@ -8,13 +8,15 @@ RAW=${RAW:-data/raw}                      # downloaded Google Drive data
 DATA=${DATA:-data/processed}              # YOLO-seg tree + index.csv
 SPLIT=${SPLIT:-$DATA/splits/pilot}
 PROJECT=${PROJECT:-runs/pilot}
-TRAIN_IMAGES=${TRAIN_IMAGES:-6000}
-VAL_IMAGES=${VAL_IMAGES:-1500}
+TRAIN_IMAGES=${TRAIN_IMAGES:-10000}          # photos; every scooter/stairs/traffic_light photo is included anyway
+VAL_IMAGES=${VAL_IMAGES:-2500}
 DEVICE=${DEVICE:-0}
 EXTRA=${EXTRA:-}                          # e.g. EXTRA="epochs=40 batch=32"
 OPTIONAL=${OPTIONAL:-0}                   # 1 = also run B2b (DINOv2-B) and B5b (C-RADIOv4-SO400M)
 
-[ -f "$DATA/index.csv" ] || python tools/prepare_dataset.py --src "$RAW" --out "$DATA"
+SURFACE=${SURFACE:-}                      # AI-Hub Surface (CVAT XML) folder -> stairs (caution_zone/stairs)
+[ -f "$DATA/index.csv" ] || python tools/prepare_dataset.py --src "$RAW" --out "$DATA" \
+    ${SURFACE:+--extra-src "$SURFACE" --extra-keep stairs}
 [ -f "$SPLIT/data.yaml" ] || python tools/make_subset.py --data "$DATA" --out "$SPLIT" \
     --train-images "$TRAIN_IMAGES" --val-images "$VAL_IMAGES"
 

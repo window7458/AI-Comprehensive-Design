@@ -13,6 +13,7 @@
    b. fill phase — the rest of the budget is drawn with repeat-factor weights
       (w = max over classes in the image of sqrt(t / f_c)), again thinned along time.
 
+   Every photo of an `include_all` class (scooter, stairs, traffic_light, ...) is always taken first.
    Classes in `focus_weights` (classes.yaml) get quota x weight and a stronger fill/RFS weight —
    used to fine-tune on what the COCO-pretrained student has never seen (scooter, pole, bollard ...).
 
@@ -94,8 +95,10 @@ def thin_along_time(idx: np.ndarray, df: pd.DataFrame, keep: int) -> np.ndarray:
 
 
 def select_images(df: pd.DataFrame, names: list[str], budget: int, min_per_class: int, fill_t: float,
-                  rng: np.random.Generator, focus: np.ndarray | None = None) -> np.ndarray:
-    """`focus` = per-class priority multiplier (1 = normal): scales the quota and the fill weight."""
+                  rng: np.random.Generator, focus: np.ndarray | None = None,
+                  must: np.ndarray | None = None) -> np.ndarray:
+    """`focus` = per-class priority multiplier (1 = normal): scales the quota and the fill weight.
+    `must`  = images that are always taken (include_all classes); quotas are filled even past the budget."""
     n = len(df)
     if budget <= 0 or budget >= n:
         return np.ones(n, dtype=bool)
@@ -104,16 +107,15 @@ def select_images(df: pd.DataFrame, names: list[str], budget: int, min_per_class
     focus = np.ones(len(names)) if focus is None else focus
     quota = np.minimum(avail, np.round(min_per_class * focus))
     groups = pd.factorize(df["group"])[0]
-    sel = np.zeros(n, dtype=bool)
-    have = np.zeros(len(names))
-    gsel = np.zeros(groups.max() + 1)
+    sel = np.zeros(n, dtype=bool) if must is None else must.copy()
+    have = present[sel].sum(0).astype(float)
+    gsel = np.bincount(groups[sel], minlength=groups.max() + 1).astype(float)
 
     # a. quota phase: rarest class first
     for c in np.argsort(avail):
         need = int(quota[c] - have[c])
-        if need <= 0 or sel.sum() >= budget:
+        if need <= 0:
             continue
-        need = min(need, budget - int(sel.sum()))
         cand = np.flatnonzero(present[:, c] & ~sel)
         cand = thin_along_time(cand, df, 3 * need)
         picked = []
@@ -169,13 +171,16 @@ def main():
     ap.add_argument("--val-ratio", type=float, default=0.15)
     ap.add_argument("--test-ratio", type=float, default=0.10)
     ap.add_argument("--resplit", action="store_true", help="recompute the cached sequence split")
-    ap.add_argument("--train-images", type=int, default=6000, help="0 = all train images (full run)")
-    ap.add_argument("--val-images", type=int, default=1500, help="0 = all val images")
+    ap.add_argument("--train-images", type=int, default=10000,
+                    help="target photos (include_all photos and class quotas may exceed it); 0 = all (full run)")
+    ap.add_argument("--val-images", type=int, default=2500, help="0 = all val images")
     ap.add_argument("--test-images", type=int, default=0, help="0 = all test images")
     ap.add_argument("--min-train-per-class", type=int, default=300)
     ap.add_argument("--min-eval-per-class", type=int, default=60)
     ap.add_argument("--rfs-t", type=float, default=0.1, help="repeat-factor threshold for train.txt, 0 = off")
     ap.add_argument("--fill-t", type=float, default=0.3, help="repeat-factor threshold used to weight the fill phase")
+    ap.add_argument("--no-include-all", action="store_true",
+                    help="do not force every photo of include_all classes (classes.yaml) into the splits")
     ap.add_argument("--no-focus", action="store_true",
                     help="ignore focus_weights in classes.yaml (plain class balancing)")
     ap.add_argument("--seed", type=int, default=0)
@@ -184,8 +189,11 @@ def main():
     cls = load_classes(args.classes)
     df = pd.read_csv(args.data / "index.csv")
     missing = [n for n in cls["source_names"] if n not in df.columns]
-    if missing:
-        raise SystemExit(f"index.csv lacks class columns {missing}; re-run prepare_dataset.py with the same classes")
+    if missing:  # e.g. an index built before `stairs` was added -> those classes simply have no photos
+        print(f"[subset] WARNING index.csv has no column for {missing}; counted as 0 "
+              "(re-run prepare_dataset.py to pick them up)")
+        for m in missing:
+            df[m] = 0
     # balance on the fine source classes that are actually trained (ignored ones such as traffic_sign are skipped)
     names = [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t is not None]
     train_names = cls["names"]
@@ -193,6 +201,9 @@ def main():
     focus = np.array([float(fw.get(n, 1.0)) for n in names])
     if fw:
         print(f"[subset] focus weights: {fw}")
+    inc = [] if args.no_include_all else [n for n in (cls.get("include_all") or []) if n in names]
+    if inc:
+        print(f"[subset] every photo containing {inc} is included")
     members = {j: [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t == j]
                for j in range(len(train_names))}
 
@@ -218,7 +229,9 @@ def main():
     chosen = {}
     for s in SPLITS:
         part = df[df["split"] == s].reset_index(drop=True)
-        part = part[select_images(part, names, budgets[s], mins[s], args.fill_t, rng, focus)].reset_index(drop=True)
+        must = (part[inc].to_numpy() > 0).any(1) if inc else None
+        part = part[select_images(part, names, budgets[s], mins[s], args.fill_t, rng, focus, must)]
+        part = part.reset_index(drop=True)
         reps = repeat_factors(part, names, args.rfs_t, rng, focus) if s == "train" else np.ones(len(part), dtype=int)
         part["repeat"] = reps
         chosen[s] = part
@@ -257,7 +270,7 @@ def main():
     s_rep.to_csv(args.out / "subset_report_source.csv", index=False)
     md = ["# Subset report", "",
           f"budgets: {budgets}, min per source class: {mins}, rfs_t: {args.rfs_t}, seed: {args.seed}, "
-          f"focus weights: {fw or 'off'}", "",
+          f"focus weights: {fw or 'off'}, include all photos of: {inc or 'off'}", "",
           "## Training classes", "", to_markdown(t_rep), "",
           "## Source classes (balancing level)", "", to_markdown(s_rep)]
     empty = [f"{r['class']}({s})" for r in t_rows for s in SPLITS if ratios[s] > 0 and r[f"{s}_inst"] == 0]
