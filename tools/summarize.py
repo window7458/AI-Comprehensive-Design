@@ -36,7 +36,9 @@ def main():
             "exp": r["exp"], "track": r["track"], "teacher": teacher,
             "mask_mAP50-95": v["mask_map50_95"], "mask_mAP50": v["mask_map50"],
             "box_mAP50-95": v["box_map50_95"], "key_mAP": v["key_mask_map50_95"],
-            "rare_mAP": v["rare_mask_map50_95"], "scooter": v["per_class_mask_map50_95"].get("scooter"),
+            "rare_mAP": v["rare_mask_map50_95"], "focus_mAP": v.get("focus_mask_map50_95"),
+            "scooter": v["per_class_mask_map50_95"].get("scooter"),
+            "traffic_light": v["per_class_mask_map50_95"].get("traffic_light"),
             "infer_ms": v["speed_ms"].get("inference"), "train_h": r.get("train_hours"),
         })
         per_class[r["exp"]] = v["per_class_mask_map50_95"]

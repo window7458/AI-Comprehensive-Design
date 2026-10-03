@@ -87,6 +87,29 @@
 
 원본 표 이미지: [26종 분포](docs/class_distribution_26.webp), [10클래스 매핑](docs/class_mapping_10.webp)
 
+## 파인튜닝 포커스: COCO에 없는 클래스 + scooter / traffic_light
+
+student는 COCO로 사전학습된 `yolo11s-seg.pt`에서 시작한다. car·person·bus·bicycle·motorcycle·truck은 COCO에 이미 있으니,
+**COCO가 본 적 없는 클래스**와 보행 안전에 중요한 traffic_light를 중심으로 파인튜닝하도록 샘플링 가중치를 준다
+(`configs/classes.yaml`의 `focus_weights`, 원본 클래스 기준).
+
+| 가중치 | 원본 클래스 | 이유 |
+|---:|---|---|
+| 3.0 | scooter | COCO에 없음, 351개로 가장 희귀 |
+| 2.0 | traffic_light | COCO에는 있지만 횡단 판단에 핵심 |
+| 2.0 | wheelchair, stroller, carrier, kiosk | COCO에 없음, 희귀 |
+| 1.5 | pole, bollard, tree_trunk, movable_signage, barricade, power_controller, traffic_light_controller, stop | COCO에 없음(이미 흔한 편) |
+| 1.0 | car, person, bus, bicycle, motorcycle, truck, bench, chair, potted_plant, fire_hydrant, table | COCO에 있음 |
+
+- 적용 위치: 클래스별 최소 이미지 수(`min-per-class × 가중치`), fill 단계 가중치, RFS 반복 횟수(`sqrt(t × 가중치 / f_c)`).
+  모든 실험(E0, B1–B5, A-best)에 똑같이 적용되므로 비교는 공정하다.
+- 9만 장짜리 가짜 인덱스로 6,000장 파일럿을 뽑아 포커스를 끈 경우와 비교했다. traffic_light 이미지는 870 → 1,025장, other_vehicle은 1,934 → 2,199장으로 늘었다.
+  scooter 이미지는 원래 전부(172장) 들어가 있어서 장수는 그대로지만, RFS 반복 후 학습 인스턴스가 568 → 1,014로 늘었다.
+- 요약표에 **focus mAP**(scooter, traffic_light, stairs, obstacle, other_vehicle 평균)와 scooter·traffic_light 열이 따로 나온다.
+- 끄려면 `python tools/make_subset.py ... --no-focus`.
+- **stairs는 Polygon 데이터에 0개라 지금은 학습할 수 없다.** Surface 데이터의 caution_zone(계단)을 변환해 붙여야 한다.
+  Surface 라벨 형식(XML / 마스크 PNG)을 확인한 뒤 `prepare_dataset.py`에 추가할 예정이다.
+
 ## 데이터 선택: 랜덤 대신 클래스 균형 + 시퀀스 단위
 
 분포가 매우 치우쳐 있다(obstacle 29.5만 ↔ scooter 351). 무작위로 뽑으면 파일럿 부분집합에 scooter가 거의 들어가지 않는다.
@@ -137,7 +160,7 @@ tail -f pilot.log
 ### 결과 보기
 
 ```
-runs/pilot/summary_val.md      # 실험별 mask/box mAP, E0 대비 Δ, key mAP, rare mAP, scooter AP, 추론 ms, 학습 시간
+runs/pilot/summary_val.md      # 실험별 mask/box mAP, E0 대비 Δ, key / rare / focus mAP, scooter·traffic_light AP, 추론 ms, 학습 시간
 runs/pilot/per_class_val.csv   # 클래스 × 실험 mask mAP50-95
 runs/pilot/<ID>/results.json   # 실험별 상세 결과
 runs/pilot/<ID>/weights/       # best.pt (Distill은 배포용 student.pt 추가)

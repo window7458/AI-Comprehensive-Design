@@ -13,6 +13,9 @@
    b. fill phase — the rest of the budget is drawn with repeat-factor weights
       (w = max over classes in the image of sqrt(t / f_c)), again thinned along time.
 
+   Classes in `focus_weights` (classes.yaml) get quota x weight and a stronger fill/RFS weight —
+   used to fine-tune on what the COCO-pretrained student has never seen (scooter, pole, bollard ...).
+
 3. Optional repeat-factor sampling (LVIS RFS) for the train list: images with rare classes are
    listed more than once in train.txt (--rfs-t, 0 disables).
 
@@ -91,13 +94,15 @@ def thin_along_time(idx: np.ndarray, df: pd.DataFrame, keep: int) -> np.ndarray:
 
 
 def select_images(df: pd.DataFrame, names: list[str], budget: int, min_per_class: int, fill_t: float,
-                  rng: np.random.Generator) -> np.ndarray:
+                  rng: np.random.Generator, focus: np.ndarray | None = None) -> np.ndarray:
+    """`focus` = per-class priority multiplier (1 = normal): scales the quota and the fill weight."""
     n = len(df)
     if budget <= 0 or budget >= n:
         return np.ones(n, dtype=bool)
     present = df[names].to_numpy() > 0
     avail = present.sum(0)
-    quota = np.minimum(avail, min_per_class)
+    focus = np.ones(len(names)) if focus is None else focus
+    quota = np.minimum(avail, np.round(min_per_class * focus))
     groups = pd.factorize(df["group"])[0]
     sel = np.zeros(n, dtype=bool)
     have = np.zeros(len(names))
@@ -128,7 +133,7 @@ def select_images(df: pd.DataFrame, names: list[str], budget: int, min_per_class
     rest = budget - int(sel.sum())
     if rest > 0:
         f = np.maximum(avail / n, 1e-9)
-        rf = np.maximum(1.0, np.sqrt(fill_t / f))
+        rf = np.maximum(1.0, np.sqrt(fill_t * focus / f))
         cand = thin_along_time(np.flatnonzero(~sel), df, 3 * rest)
         w = np.where(present[cand].any(1), (present[cand] * rf).max(1), 0.2)
         pick = rng.choice(cand, size=min(rest, len(cand)), replace=False, p=w / w.sum())
@@ -136,14 +141,16 @@ def select_images(df: pd.DataFrame, names: list[str], budget: int, min_per_class
     return sel
 
 
-def repeat_factors(df: pd.DataFrame, names: list[str], t: float, rng: np.random.Generator) -> np.ndarray:
-    """LVIS repeat-factor sampling: r_i = max_c max(1, sqrt(t / f_c)), stochastic rounding."""
+def repeat_factors(df: pd.DataFrame, names: list[str], t: float, rng: np.random.Generator,
+                   focus: np.ndarray | None = None) -> np.ndarray:
+    """LVIS repeat-factor sampling: r_i = max_c max(1, sqrt(t * focus_c / f_c)), stochastic rounding."""
     reps = np.ones(len(df), dtype=int)
     if t <= 0 or len(df) == 0:
         return reps
     present = df[names].to_numpy() > 0
     f = np.maximum(present.mean(0), 1e-9)
-    r = np.where(present, np.maximum(1.0, np.sqrt(t / f)), 1.0).max(1)
+    focus = np.ones(len(names)) if focus is None else focus
+    r = np.where(present, np.maximum(1.0, np.sqrt(t * focus / f)), 1.0).max(1)
     return np.floor(r).astype(int) + (rng.random(len(r)) < r - np.floor(r))
 
 
@@ -169,6 +176,8 @@ def main():
     ap.add_argument("--min-eval-per-class", type=int, default=60)
     ap.add_argument("--rfs-t", type=float, default=0.1, help="repeat-factor threshold for train.txt, 0 = off")
     ap.add_argument("--fill-t", type=float, default=0.3, help="repeat-factor threshold used to weight the fill phase")
+    ap.add_argument("--no-focus", action="store_true",
+                    help="ignore focus_weights in classes.yaml (plain class balancing)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -180,6 +189,10 @@ def main():
     # balance on the fine source classes that are actually trained (ignored ones such as traffic_sign are skipped)
     names = [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t is not None]
     train_names = cls["names"]
+    fw = {} if args.no_focus else (cls.get("focus_weights") or {})
+    focus = np.array([float(fw.get(n, 1.0)) for n in names])
+    if fw:
+        print(f"[subset] focus weights: {fw}")
     members = {j: [n for n, t in zip(cls["source_names"], cls["source_to_train"]) if t == j]
                for j in range(len(train_names))}
 
@@ -205,8 +218,8 @@ def main():
     chosen = {}
     for s in SPLITS:
         part = df[df["split"] == s].reset_index(drop=True)
-        part = part[select_images(part, names, budgets[s], mins[s], args.fill_t, rng)].reset_index(drop=True)
-        reps = repeat_factors(part, names, args.rfs_t, rng) if s == "train" else np.ones(len(part), dtype=int)
+        part = part[select_images(part, names, budgets[s], mins[s], args.fill_t, rng, focus)].reset_index(drop=True)
+        reps = repeat_factors(part, names, args.rfs_t, rng, focus) if s == "train" else np.ones(len(part), dtype=int)
         part["repeat"] = reps
         chosen[s] = part
         lines = [p for p, r in zip(part["image"], reps) for _ in range(r)]
@@ -243,7 +256,8 @@ def main():
     t_rep.to_csv(args.out / "subset_report.csv", index=False)
     s_rep.to_csv(args.out / "subset_report_source.csv", index=False)
     md = ["# Subset report", "",
-          f"budgets: {budgets}, min per source class: {mins}, rfs_t: {args.rfs_t}, seed: {args.seed}", "",
+          f"budgets: {budgets}, min per source class: {mins}, rfs_t: {args.rfs_t}, seed: {args.seed}, "
+          f"focus weights: {fw or 'off'}", "",
           "## Training classes", "", to_markdown(t_rep), "",
           "## Source classes (balancing level)", "", to_markdown(s_rep)]
     empty = [f"{r['class']}({s})" for r in t_rows for s in SPLITS if ratios[s] > 0 and r[f"{s}_inst"] == 0]

@@ -73,6 +73,29 @@ aliases:
   power controller: power_controller
   traffic light controller: traffic_light_controller
 
+# Fine-tuning focus (source-class names -> priority weight, others = 1).
+# The student starts from COCO weights, so classes COCO never had (scooter, pole, bollard, kiosk,
+# wheelchair ...) and the safety-critical traffic_light get a bigger quota (min-per-class x weight)
+# and stronger repeat-factor sampling. COCO classes (car, person, bus, bicycle, motorcycle, truck,
+# bench, chair, potted_plant, fire_hydrant, table) stay at 1. `make_subset.py --no-focus` disables it.
+focus_weights:
+  scooter: 3.0                    # not in COCO, 351 instances
+  traffic_light: 2.0              # in COCO but safety-critical for crossing
+  wheelchair: 2.0                 # not in COCO
+  stroller: 2.0                   # not in COCO
+  carrier: 2.0                    # not in COCO
+  kiosk: 2.0                      # not in COCO
+  pole: 1.5                       # not in COCO (already very frequent)
+  bollard: 1.5                    # not in COCO
+  tree_trunk: 1.5                 # not in COCO
+  movable_signage: 1.5            # not in COCO
+  barricade: 1.5                  # not in COCO
+  power_controller: 1.5           # not in COCO
+  traffic_light_controller: 1.5   # not in COCO
+  stop: 1.5                       # bus stop, not in COCO
+  # stairs: no Polygon data yet (Surface caution_zone) -> nothing to sample
+
 # Reported as separate means in the summary (training-class names).
 key_classes: [obstacle, car, person, traffic_light, bus, bicycle, motorcycle]   # walking-safety core classes
 rare_classes: [scooter, motorcycle, bicycle, bus]                                # < 2% of instances
+focus_classes: [scooter, traffic_light, stairs, obstacle, other_vehicle]         # fine-tuning focus (non-COCO)

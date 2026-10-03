@@ -68,6 +68,7 @@ def evaluate(weights: Path, data: str, split: str, args_common: dict, save_dir: 
         "box_map50_95": float(m.box.map), "box_map50": float(m.box.map50),
         "key_mask_map50_95": mean_of(classes.get("key_classes", [])),
         "rare_mask_map50_95": mean_of(classes.get("rare_classes", [])),
+        "focus_mask_map50_95": mean_of(classes.get("focus_classes", [])),
         "per_class_mask_map50_95": per_class,
         "speed_ms": {k: float(v) for k, v in m.speed.items()},
     }
@@ -131,7 +132,7 @@ def main():
     (run_dir / "results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False))
     v = results["val"]
     print(f"[train] {args.exp} done: mask mAP50-95 {v['mask_map50_95']:.4f}  key {v['key_mask_map50_95']}  "
-          f"rare {v['rare_mask_map50_95']}  scooter {v['per_class_mask_map50_95'].get('scooter')}")
+          f"rare {v['rare_mask_map50_95']}  focus {v['focus_mask_map50_95']}  scooter {v['per_class_mask_map50_95'].get('scooter')}")
 
 
 if __name__ == "__main__":
