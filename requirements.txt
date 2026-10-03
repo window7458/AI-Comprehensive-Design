@@ -1,4 +1,5 @@
-# PyTorch with CUDA is expected to be pre-installed on the GPU server (torch>=2.3).
+# PyTorch with CUDA must already match the server driver (torch>=2.3); setup_mondrian.sh checks it.
+# opencv comes with ultralytics — do not add opencv-python-headless (two cv2 builds conflict).
 ultralytics==8.4.166
 transformers>=4.56      # DINOv3 support
 huggingface_hub
@@ -6,5 +7,4 @@ timm                    # RADIO / C-RADIO
 einops                  # RADIO / C-RADIO
 pandas
 pyyaml
-opencv-python-headless
 gdown                   # Google Drive download

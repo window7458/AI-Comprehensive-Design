@@ -109,8 +109,9 @@
 
 ```bash
 git clone <this repo> && cd <repo>
-bash scripts/setup_mondrian.sh                 # 패키지 설치 + yolo11s-seg.pt 미리 받기
+bash scripts/setup_mondrian.sh                 # GPU·CUDA 확인 + 패키지 설치 + GPU에서 학습 경로 점검 + yolo11s-seg.pt 받기
 export HF_TOKEN=hf_xxx                         # DINOv3는 gated → HF 페이지에서 라이선스 동의 후 토큰 발급
+python tools/check_teachers.py                 # SigLIP2 / DINOv3 / RADIO / C-RADIO를 받아 GPU에서 실행해 보기
 
 # 1) 구글 드라이브 데이터 받기 ("링크가 있는 모든 사용자" 공유, zip/tar 권장 — gdown은 폴더당 50개 파일 제한)
 GDRIVE_URL="https://drive.google.com/file/d/<id>/view" bash scripts/download_data.sh     # → data/raw
@@ -182,5 +183,11 @@ tests/     make_synthetic.py, smoke_test.sh (합성 데이터 + 랜덤 teacher�
 - **GPU는 1장 기준**이다. teacher를 모델 밖(프로세스 전역)에 두기 때문에 Ultralytics의 멀티 GPU(DDP) 모드는 지원하지 않는다.
 - **RADIO/C-RADIO**는 `torch.hub`(GitHub `NVlabs/RADIO`)에서 먼저 받고, 실패하면 Hugging Face(`nvidia/C-RADIOv3-B` 등)로 받는다. 서버가 GitHub과 HF에 접속할 수 있어야 한다.
 - 긴 학습 전에 `python tools/check_teachers.py`로 모든 teacher가 받아지고 돌아가는지 먼저 확인한다(`run_pilot.sh`는 이 단계를 자동으로 실행한다).
-- 검증 범위: `bash tests/smoke_test.sh`로 데이터 변환 → 샘플링 → E0/Distill/Fusion 학습 → student 추출 → 평가 → 요약까지 CPU에서 통과했다.
-  실제 teacher 가중치 다운로드와 GPU 학습은 개발 환경의 네트워크 제한 때문에 여기서 돌리지 못했다. 서버에서 `check_teachers.py`로 먼저 확인할 것.
+- **GPU·CUDA 점검**: `python tools/check_gpu.py`는 torch·CUDA·cuDNN 버전, GPU 이름·메모리, bf16 지원 여부를 출력하고,
+  증류·Fusion 모델을 GPU에서 AMP로 한 번 학습해 본다(다운로드 없음, 1분 이내). `setup_mondrian.sh`와 `run_pilot.sh`가 자동으로 실행한다.
+  torch가 CPU 전용이면 `setup_mondrian.sh`가 `nvidia-smi`의 드라이버 CUDA 버전에 맞는 torch를 설치한다. 이미 GPU용 torch가 있으면 건드리지 않는다.
+- teacher는 bf16을 지원하는 GPU(A100, H100, RTX 30·40 계열 등)에서는 bf16으로, 아니면(V100, T4 등) fp16으로 돌아간다.
+- 검증 범위: 합성 데이터와 랜덤 teacher로 데이터 변환 → 샘플링 → E0/Distill/Fusion 학습 → student 추출 → 평가 → 요약까지 **CPU에서** 통과했다(`bash tests/smoke_test.sh`).
+  SigLIP2·DINOv3·DINOv2 래퍼는 같은 구조의 작은 랜덤 모델로 토큰 → feature map 변환 모양을 확인했다.
+  **실제 GPU 실행과 실제 teacher 가중치(SigLIP2, DINOv3, RADIO, C-RADIO) 다운로드는 개발 환경에 GPU가 없고 Hugging Face·GitHub 접속이 막혀 있어 확인하지 못했다.**
+  서버에서 `check_gpu.py` → `check_teachers.py` 순서로 먼저 확인할 것.

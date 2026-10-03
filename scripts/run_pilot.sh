@@ -18,6 +18,7 @@ OPTIONAL=${OPTIONAL:-0}                   # 1 = also run B2b (DINOv2-B) and B5b 
 [ -f "$SPLIT/data.yaml" ] || python tools/make_subset.py --data "$DATA" --out "$SPLIT" \
     --train-images "$TRAIN_IMAGES" --val-images "$VAL_IMAGES"
 
+python tools/check_gpu.py
 TEACHERS="siglip2_b dinov3_b radio_v2.5_b cradio_v3_b"
 [ "$OPTIONAL" = 1 ] && TEACHERS="$TEACHERS dinov2_b cradio_v4_so400m"
 python tools/check_teachers.py $TEACHERS

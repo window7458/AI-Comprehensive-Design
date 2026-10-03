@@ -4,6 +4,7 @@
 Catches missing HF_TOKEN / un-accepted licences (DINOv3 is gated) and blocked hosts early.
   python tools/check_teachers.py                       # teachers used by the default pilot
   python tools/check_teachers.py dinov2_b cradio_v4_so400m
+  python tools/check_teachers.py --cpu                 # no GPU (slow)
 """
 
 import sys
@@ -19,8 +20,17 @@ DEFAULT = ["siglip2_b", "dinov3_b", "radio_v2.5_b", "cradio_v3_b"]
 
 
 def main():
-    names = sys.argv[1:] or DEFAULT
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    args = [a for a in sys.argv[1:] if a != "--cpu"]
+    names = args or DEFAULT
+    if torch.cuda.is_available():
+        dev = "cuda"
+        print(f"device: {torch.cuda.get_device_name(0)} | torch {torch.__version__} CUDA {torch.version.cuda} | "
+              f"teacher dtype {'bf16' if torch.cuda.is_bf16_supported() else 'fp16'}")
+    elif "--cpu" in sys.argv:
+        dev = "cpu"
+    else:
+        print("FAIL no CUDA GPU visible to torch — run `python tools/check_gpu.py` (or pass --cpu to test anyway)")
+        sys.exit(1)
     x = torch.rand(8, 3, 640, 640, device=dev)
     failed = []
     for n in names:
@@ -35,8 +45,13 @@ def main():
             if dev == "cuda":
                 torch.cuda.synchronize()
             params = sum(p.numel() for p in t.parameters()) / 1e6
-            print(f"OK   {n:18s} dim={t.dim:5d} grid={tuple(f.shape[-2:])} params={params:6.1f}M "
-                  f"load={load_s:5.1f}s fwd(8x640)={time.time() - t0:5.2f}s")
+            mem = f" peak={torch.cuda.max_memory_allocated() / 2**30:4.1f}GiB" if dev == "cuda" else ""
+            ok = torch.isfinite(f).all().item() and f.std().item() > 0
+            print(f"{'OK  ' if ok else 'BAD '} {n:18s} dim={t.dim:5d} grid={tuple(f.shape[-2:])} params={params:6.1f}M "
+                  f"load={load_s:5.1f}s fwd(8x640)={time.time() - t0:5.2f}s{mem}"
+                  + ("" if ok else "  <- NaN/constant features"))
+            if not ok:
+                failed.append(n)
         except Exception as e:  # noqa: BLE001
             failed.append(n)
             print(f"FAIL {n:18s} {type(e).__name__}: {str(e).splitlines()[0][:300]}")
